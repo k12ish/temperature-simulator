@@ -10,7 +10,7 @@ import (
 const (
 	winTitle = "Temperature Simulator"
 	winHeight = 600
-	winWidth = 800
+	winWidth = 1000
 )
 
 func run() (err error) {
@@ -36,8 +36,6 @@ func run() (err error) {
 	defer renderer.Destroy()
 	clear(renderer)
 
-
-
 	running := true
 	for running {
 			switch t := sdl.PollEvent().(type) {
@@ -48,6 +46,12 @@ func run() (err error) {
 				if t.State == sdl.PRESSED {
 					draw(renderer, t.X, t.Y)
 				}
+
+			case *sdl.MouseButtonEvent:
+				if t.State == sdl.PRESSED {
+					draw(renderer, t.X, t.Y)
+				}
+
 			case *sdl.KeyboardEvent:
 				if string(t.Keysym.Sym) == "c" {
 					clear(renderer)
