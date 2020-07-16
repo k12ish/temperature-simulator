@@ -10,30 +10,97 @@ import (
 const (
 	winTitle = "Temperature Simulator"
 	winHeight = 600
-	winWidth = 1000
+	winWidth = 795
+	heatMapX = 15
+	heatMapY = 15
+	heatMapW = 768
+	heatMapH = 555	
 )
 
-func run() (err error) {
-	var window *sdl.Window
-	var renderer *sdl.Renderer
+var (
+	// initialized by initSDL()
+	window *sdl.Window
+	renderer *sdl.Renderer
+	tex *sdl.Texture
+	err error
+)
 
+var (
+	energyArr  = [heatMapW][heatMapH]uint8{}
+)
+
+
+func initSDL() (err error){
 	if err = sdl.Init(sdl.INIT_EVERYTHING); err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to initialize SDL: %s\n", err)
+		return err
+	}
+	if window, err = sdl.CreateWindow(winTitle, sdl.WINDOWPOS_UNDEFINED, sdl.WINDOWPOS_UNDEFINED, winWidth, winHeight, sdl.WINDOW_SHOWN); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to create window: %s\n", err)
+		return err
+	}
+	if renderer, err = sdl.CreateRenderer(window, -1, sdl.RENDERER_ACCELERATED); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to create renderer: %s\n", err)
+		return err
+	}
+	if 	tex, err = renderer.CreateTexture(sdl.PIXELFORMAT_ABGR8888, sdl.TEXTUREACCESS_STREAMING, heatMapW, heatMapH); err != nil{
+		fmt.Fprintf(os.Stderr, "Failed to create texture: %s\n", err)
+		return err
+	}
+	tex.SetBlendMode(sdl.BLENDMODE_NONE)
+	return nil
+}
+
+
+func main() {
+	if initSDL() != nil {
 		return
 	}
 	defer sdl.Quit()
-
-	if window, err = sdl.CreateWindow(winTitle, sdl.WINDOWPOS_UNDEFINED, sdl.WINDOWPOS_UNDEFINED, winWidth, winHeight, sdl.WINDOW_SHOWN); err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to create window: %s\n", err)
-		return
-	}
 	defer window.Destroy()
-
-	if renderer, err = sdl.CreateRenderer(window, -1, sdl.RENDERER_ACCELERATED); err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to create renderer: %s\n", err)
-		return
-	}
 	defer renderer.Destroy()
+	defer tex.Destroy()
+
+	renderer.SetDrawColor(0,0,0,255)
+	renderer.Clear()
+	renderer.Present()
+	gfx.StringColor(renderer, heatMapX, heatMapY + heatMapH + 15, 
+		"Drawing pixels from an array", sdl.Color{0, 255, 0, 255})
+
+	heatMapRect := sdl.Rect{heatMapX, heatMapY, heatMapW, heatMapH}	
+	for _, element := range energyArr {
+		// fmt.Println(element)
+		_ = element
+	}
+
+	for offset := 0; offset < 512; offset++ {
+		// iterating through offset animates pattern
+		bytes, _, err := tex.Lock(nil)
+		if err != nil {
+			panic(err)
+		}
+
+		for i := 0; i < len(bytes); i += 4 {
+			// (i/4) % heatMapW + (i/4) / heatMapW represents the
+			// manhattan distance from the top left pixel
+			minus := (i / 4) - offset
+			plus := (i / 4) + offset
+			// byte() takes the last 8 bits of integer, eg. mod 256
+			bytes[i] = byte(minus % heatMapW + minus / heatMapW)
+			bytes[i+1] = byte(plus % heatMapW + plus / heatMapW)
+			bytes[i+2] = 0
+			bytes[i+3] = 255
+		}
+
+		tex.Unlock()
+		renderer.Copy(tex, nil, &heatMapRect)
+		renderer.Present()		
+		sdl.Delay(10)
+	}
+}
+
+
+func run() (err error) {
 	clear(renderer)
 
 	running := true
@@ -48,6 +115,7 @@ func run() (err error) {
 				}
 
 			case *sdl.MouseButtonEvent:
+				fmt.Println("Mouse", t.Which, "at", t.X, t.Y)
 				if t.State == sdl.PRESSED {
 					draw(renderer, t.X, t.Y)
 				}
@@ -75,77 +143,4 @@ func clear(renderer *sdl.Renderer) {
 	gfx.StringColor(renderer, 16, 16, "GFX Demo", sdl.Color{0, 255, 0, 255})
 	renderer.Present()
 }
-/*
-func main() {
-	if err := run(); err != nil {
-		os.Exit(1)
-	}
-}
 
-
-exit program on 'quit button'
-
-running := true
-for running{
-	switch t := sdl.PollEvent().(type) {
-	case *sdl.QuitEvent:
-		running = false
-	...
-}
-*/
-
-func main() {
-	if err := sdl.Init(sdl.INIT_EVERYTHING); err != nil {
-		panic(err)
-	}
-	defer sdl.Quit()
-
-	window, err := sdl.CreateWindow("test", sdl.WINDOWPOS_UNDEFINED, sdl.WINDOWPOS_UNDEFINED,
-		400, 400, sdl.WINDOW_SHOWN)
-	if err != nil {
-		panic(err)
-	}
-	defer window.Destroy()
-
-	renderer, err := sdl.CreateRenderer(window, -1, sdl.RENDERER_ACCELERATED)
-	if err != nil {
-		panic(err)
-	}
-
-	renderer.SetDrawColor(0, 0, 0, 0)
-	renderer.Clear()
-
-	tex, err := renderer.CreateTexture(
-		sdl.PIXELFORMAT_ABGR8888, sdl.TEXTUREACCESS_STREAMING,
-		200, 200)
-
-	rect := sdl.Rect{
-		X: 15,
-		Y: 15,
-		W: 200,
-		H: 200,
-	}
-
-	// We'll lock the texture to draw a centered yellow square.
-	bytes, pitch, err := tex.Lock(nil)
-	_ = pitch
-	if err != nil {
-		panic(err)
-	}
-	tex.SetBlendMode(sdl.BLENDMODE_NONE)
-
-	for i := 0; i < len(bytes); i += 4 {
-		bytes[i] = byte(i%255)
-		bytes[i+1] = 255
-		bytes[i+2] = 0
-		bytes[i+3] = 255
-	}
-
-	tex.Unlock()
-
-
-	renderer.Copy(tex, nil, &rect)
-	renderer.Present()
-
-	sdl.Delay(5000)
-}
