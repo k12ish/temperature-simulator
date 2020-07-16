@@ -75,14 +75,14 @@ func clear(renderer *sdl.Renderer) {
 	gfx.StringColor(renderer, 16, 16, "GFX Demo", sdl.Color{0, 255, 0, 255})
 	renderer.Present()
 }
-
+/*
 func main() {
 	if err := run(); err != nil {
 		os.Exit(1)
 	}
 }
 
-/*
+
 exit program on 'quit button'
 
 running := true
@@ -93,3 +93,59 @@ for running{
 	...
 }
 */
+
+func main() {
+	if err := sdl.Init(sdl.INIT_EVERYTHING); err != nil {
+		panic(err)
+	}
+	defer sdl.Quit()
+
+	window, err := sdl.CreateWindow("test", sdl.WINDOWPOS_UNDEFINED, sdl.WINDOWPOS_UNDEFINED,
+		400, 400, sdl.WINDOW_SHOWN)
+	if err != nil {
+		panic(err)
+	}
+	defer window.Destroy()
+
+	renderer, err := sdl.CreateRenderer(window, -1, sdl.RENDERER_ACCELERATED)
+	if err != nil {
+		panic(err)
+	}
+
+	renderer.SetDrawColor(0, 0, 0, 0)
+	renderer.Clear()
+
+	tex, err := renderer.CreateTexture(
+		sdl.PIXELFORMAT_ABGR8888, sdl.TEXTUREACCESS_STREAMING,
+		200, 200)
+
+	rect := sdl.Rect{
+		X: 15,
+		Y: 15,
+		W: 200,
+		H: 200,
+	}
+
+	// We'll lock the texture to draw a centered yellow square.
+	bytes, pitch, err := tex.Lock(nil)
+	_ = pitch
+	if err != nil {
+		panic(err)
+	}
+	tex.SetBlendMode(sdl.BLENDMODE_NONE)
+
+	for i := 0; i < len(bytes); i += 4 {
+		bytes[i] = byte(i%255)
+		bytes[i+1] = 255
+		bytes[i+2] = 0
+		bytes[i+3] = 255
+	}
+
+	tex.Unlock()
+
+
+	renderer.Copy(tex, nil, &rect)
+	renderer.Present()
+
+	sdl.Delay(5000)
+}
