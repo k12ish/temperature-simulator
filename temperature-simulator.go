@@ -8,17 +8,22 @@ import (
 )
 
 const (
+	marginN = 15
+	marginE = 15
+	marginS = 40
+	marginW = 15
+
+	heatMapW = 457
+	heatMapH = 457
+
 	winTitle = "Temperature Simulator"
-	winHeight = 600
-	winWidth = 795
-	heatMapX = 15
-	heatMapY = 15
-	heatMapW = 768
-	heatMapH = 555	
+	winHeight = marginN + heatMapH + marginS
+	winWidth = marginW + heatMapW + marginE
 )
 
+
+// initialized by initSDL()
 var (
-	// initialized by initSDL()
 	window *sdl.Window
 	renderer *sdl.Renderer
 	tex *sdl.Texture
@@ -26,7 +31,8 @@ var (
 )
 
 var (
-	energyArr  = [heatMapW][heatMapH]uint8{}
+	energyArr = [heatMapW][heatMapH]uint8{}
+	heatMapRect = sdl.Rect{marginW, marginN, heatMapW, heatMapH}	
 )
 
 
@@ -48,6 +54,12 @@ func initSDL() (err error){
 		return err
 	}
 	tex.SetBlendMode(sdl.BLENDMODE_NONE)
+
+	renderer.SetDrawColor(0,0,0,255)
+	renderer.Clear()
+	renderer.Present()
+	gfx.StringColor(renderer, marginW, marginN + heatMapH + 15, 
+		"Drawing pixels from array",sdl.Color{0, 255, 0, 255})
 	return nil
 }
 
@@ -61,18 +73,72 @@ func main() {
 	defer renderer.Destroy()
 	defer tex.Destroy()
 
-	renderer.SetDrawColor(0,0,0,255)
-	renderer.Clear()
-	renderer.Present()
-	gfx.StringColor(renderer, heatMapX, heatMapY + heatMapH + 15, 
-		"Drawing pixels from an array", sdl.Color{0, 255, 0, 255})
+	fmt.Println(energyArr[1])
+	
+	running := true
+	mouseButtonPressed := false
 
-	heatMapRect := sdl.Rect{heatMapX, heatMapY, heatMapW, heatMapH}	
-	for _, element := range energyArr {
-		// fmt.Println(element)
-		_ = element
+	// for i := 0; i < heatMapH; i++ {
+	// 	for j := 0; j < heatMapW; j++ {
+	// 		energyArr[i][j] = 122
+	// 	}
+		
+	// }
+
+
+	buildHeatmap()
+	for running {
+			switch t := sdl.PollEvent().(type) {
+			case *sdl.QuitEvent:
+				running = false
+			case *sdl.MouseMotionEvent:
+				fmt.Println("Mouse", t.Which, "at", t.X, t.Y)
+				if mouseButtonPressed {
+					heatMapClicked(t.X, t.Y)
+				}
+
+			case *sdl.MouseButtonEvent:
+				if t.State == sdl.PRESSED {
+					heatMapClicked(t.X, t.Y)
+					mouseButtonPressed = true
+				} else {
+					mouseButtonPressed = false
+				}
+				fmt.Println("Mouse", mouseButtonPressed, "at", t.X, t.Y)
+		}
+	}
+}
+
+func heatMapClicked(X int32, Y int32) {
+	x := X - marginW
+	y := Y - marginN
+	if 0 <= x && x < heatMapW && 0 <= y && y < heatMapH{
+		energyArr[y][x] += 100
+		buildHeatmap()
 	}
 
+}
+
+
+func buildHeatmap() {
+	bytes, _, err := tex.Lock(nil)
+	if err != nil {
+		panic(err)
+	}
+	for i, sublist := range energyArr {
+		for j, value := range sublist {
+			bytes[(heatMapW * i + j) * 4] = value
+		}
+	}
+	tex.Unlock()
+	renderer.Copy(tex, nil, &heatMapRect)
+	renderer.Present()
+}
+
+
+func stockAnimation() {
+	/* fills the heatmap with pretty patterns
+	*/
 	for offset := 0; offset < 512; offset++ {
 		// iterating through offset animates pattern
 		bytes, _, err := tex.Lock(nil)
