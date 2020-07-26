@@ -5,7 +5,7 @@ import (
 	"github.com/veandco/go-sdl2/gfx"
 	"github.com/veandco/go-sdl2/sdl"
 	"os"
-    "sync"
+	"sync"
 )
 
 const (
@@ -14,7 +14,7 @@ const (
 	marginS = 40
 	marginW = 15
 
-	heatMapW = 300
+	heatMapW = 500
 	heatMapH = 457
 
 	winTitle  = "Temperature Simulator"
@@ -31,14 +31,20 @@ var (
 )
 
 var (
-	energyArr       = [heatMapH][heatMapW]uint8{}
+	energyArr = [heatMapH][heatMapW]float32{}
 )
 
 var (
 	heatMapRect     = sdl.Rect{marginW, marginN, heatMapW, heatMapH}
-	click_chan      = make(chan point, 100)
+	leftMouse_click = make(chan point, 100)
 	program_running = true
+	standardBrush   = BrushConstructor(10)
 )
+
+type point struct {
+	X int32
+	Y int32
+}
 
 func initSDL() (err error) {
 	if err = sdl.Init(sdl.INIT_EVERYTHING); err != nil {
@@ -58,18 +64,12 @@ func initSDL() (err error) {
 		return err
 	}
 	tex.SetBlendMode(sdl.BLENDMODE_NONE)
-
 	renderer.SetDrawColor(0, 0, 0, 255)
 	renderer.Clear()
 	renderer.Present()
 	gfx.StringColor(renderer, marginW, marginN+heatMapH+15,
-		"Drawing pixels from array", sdl.Color{0, 255, 0, 255})
+		"Fourier's Law implementation bug", sdl.Color{0, 255, 0, 255})
 	return nil
-}
-
-type point struct {
-	X int32
-	Y int32
 }
 
 func main() {
@@ -81,41 +81,76 @@ func main() {
 	defer renderer.Destroy()
 	defer tex.Destroy()
 
-	mouseButtonPressed := false
+	leftMousePressed := false
 
-	// for i := 0; i < heatMapH; i++ {
-	// 	for j := 0; j < heatMapW; j++ {
-	// 		energyArr[i][j] = uint8(i + j)
-	// 	}
-	// }
-	var wg sync.WaitGroup
-	wg.Add(1)
-	go runHeatMap(&wg)
+	var heatMap_wg sync.WaitGroup
+	// HeatMap_wg prevents the program from executing deferred functions
+	// Prevents texture being destroyed while runHeatMap() is running
+	go runHeatMap(&heatMap_wg)
+	heatMap_wg.Add(1)
 
 	for program_running {
 		switch t := sdl.PollEvent().(type) {
 		case *sdl.QuitEvent:
 			program_running = false
 		case *sdl.MouseMotionEvent:
-			// fmt.Println("Mouse", t.Which, "at", t.X, t.Y)
-			if mouseButtonPressed {
-				// heatMapClicked(t.X, t.Y)
-				click_chan <- point{t.X, t.Y}
+			if leftMousePressed {
+				leftMouse_click <- point{t.X, t.Y}
 			}
-
 		case *sdl.MouseButtonEvent:
-			if t.State == sdl.PRESSED {
-				// heatMapClicked(t.X, t.Y)
-				click_chan <- point{t.X, t.Y}
-				mouseButtonPressed = true
-			} else {
-				mouseButtonPressed = false
+			if t.Button == sdl.BUTTON_LEFT {
+				if t.State == sdl.PRESSED {
+					leftMouse_click <- point{t.X, t.Y}
+					leftMousePressed = true
+				} else {
+					leftMousePressed = false
+				}				
 			}
-			// fmt.Println("Mouse", mouseButtonPressed, "at", t.X, t.Y)
 		}
 	}
-	wg.Wait()
+	heatMap_wg.Wait()
+}
 
+type Brush struct {
+	Points    [][2]int32
+	MaxRadius int32
+}
+
+func BrushConstructor(radii ...int32) Brush {
+	var max int32
+	var squared int32
+	var array [][2]int32
+	for _, r := range radii {
+		if r > max {
+			max = r
+		}
+		squared = r * r
+		for i := int32(0); i <= r; i++ {
+			for j := int32(0); j <= r; j++ {
+				if i*i+j*j > squared {
+					continue
+				}
+				if j != 0 {
+					if i != 0 {
+						array = append(array,
+							[2]int32{i, j}, [2]int32{i, -j},
+							[2]int32{-i, j}, [2]int32{-i, -j})
+					} else {
+						array = append(array,
+							[2]int32{i, j}, [2]int32{i, -j})
+					}
+				} else {
+					if i != 0 {
+						array = append(array,
+							[2]int32{i, j}, [2]int32{-i, j})
+					} else {
+						array = append(array, [2]int32{i, j})
+					}
+				}
+			}
+		}
+	}
+	return Brush{array, max}
 }
 
 func runHeatMap(func_wg *sync.WaitGroup) {
@@ -127,33 +162,52 @@ func runHeatMap(func_wg *sync.WaitGroup) {
 		channel_empty = true
 		for channel_empty {
 			select {
-			case elem = <-click_chan:
-				heatMapClicked(elem.X, elem.Y)
+			case elem = <-leftMouse_click:
+				x, y := elem.X-marginW, elem.Y-marginN
+				if 0 <= x && x < heatMapW && 0 <= y && y < heatMapH {
+					heatMapClicked(x, y)
+				}
+
 			default:
 				channel_empty = false
 			}
 		}
+		heatFlow()
 		buildHeatmap()
 	}
 }
 
-func heatMapClicked(X int32, Y int32) {
-	x := X - marginW
-	y := Y - marginN
-
-	if 0 <= x && x < heatMapW && 0 <= y && y < heatMapH {
-		energyArr[y][x] += 100
-
-
-		minumum_value := x
-		for _, v := range [3]int32{y, heatMapW - x, heatMapH - y} {
-			if v < minumum_value {
-				minumum_value = v
-			}
+func heatMapClicked(x int32, y int32) {
+	minumum_value := x
+	for _, v := range [3]int32{y, heatMapW - x, heatMapH - y} {
+		if v < minumum_value {
+			minumum_value = v
 		}
-		fmt.Println(minumum_value)
+	}
+	if standardBrush.MaxRadius < minumum_value {
+		for _, list := range standardBrush.Points {
+			energyArr[y+list[1]][x+list[0]] += 100
+		}
 	}
 }
+
+func heatFlow() {
+	for i := 0; i < heatMapH; i++ {
+		for j := 1; j < heatMapW; j++ {
+			q := (energyArr[i][j] - energyArr[i][j-1]) / 2
+			energyArr[i][j] -= q
+			energyArr[i][j-1] += q
+		}
+	}
+	for i := 1; i < heatMapH; i++ {
+		for j := 0; j < heatMapW; j++ {
+			q := (energyArr[i][j] - energyArr[i-1][j]) / 2
+			energyArr[i][j] -= q
+			energyArr[i-1][j] += q
+		}
+	}
+}
+
 
 func buildHeatmap() {
 	bytes, _, err := tex.Lock(nil)
@@ -162,11 +216,10 @@ func buildHeatmap() {
 	}
 	for i, sublist := range energyArr {
 		for j, value := range sublist {
-			bytes[(heatMapW*i+j)*4] = value
+			bytes[(heatMapW*i+j)*4] = uint8(value)
 		}
 	}
 	tex.Unlock()
-	sdl.Delay(100)
 	renderer.Copy(tex, nil, &heatMapRect)
 	renderer.Present()
 }
@@ -196,48 +249,4 @@ func stockAnimation() {
 		renderer.Present()
 		sdl.Delay(10)
 	}
-}
-
-func run() (err error) {
-	clear(renderer)
-
-	running := true
-	for running {
-		switch t := sdl.PollEvent().(type) {
-		case *sdl.QuitEvent:
-			running = false
-		case *sdl.MouseMotionEvent:
-			fmt.Println("Mouse", t.Which, "at", t.X, t.Y)
-			if t.State == sdl.PRESSED {
-				draw(renderer, t.X, t.Y)
-			}
-
-		case *sdl.MouseButtonEvent:
-			fmt.Println("Mouse", t.Which, "at", t.X, t.Y)
-			if t.State == sdl.PRESSED {
-				draw(renderer, t.X, t.Y)
-			}
-
-		case *sdl.KeyboardEvent:
-			if string(t.Keysym.Sym) == "c" {
-				clear(renderer)
-			}
-		}
-		// sdl.Delay(1)
-	}
-
-	return
-}
-
-func draw(renderer *sdl.Renderer, X int32, Y int32) {
-	gfx.FilledCircleColor(renderer, X, Y, 20, sdl.Color{0, 255, 0, 22})
-	gfx.FilledCircleColor(renderer, X, Y, 10, sdl.Color{0, 255, 0, 22})
-	renderer.Present()
-}
-
-func clear(renderer *sdl.Renderer) {
-	renderer.SetDrawColor(0, 0, 0, 255)
-	renderer.Clear()
-	gfx.StringColor(renderer, 16, 16, "GFX Demo", sdl.Color{0, 255, 0, 255})
-	renderer.Present()
 }
