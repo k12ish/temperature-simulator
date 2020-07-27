@@ -28,23 +28,60 @@ var (
 	renderer *sdl.Renderer
 	tex      *sdl.Texture
 	err      error
+
+	heatMapRectPtr  = &sdl.Rect{marginW, marginN, heatMapW, heatMapH}
+)
+
+type material byte
+
+const (
+	Metal material = 1 << iota
+	Plastic
+	Glass
+	NumberOfMaterials = iota
 )
 
 var (
-	energyArr = [heatMapH][heatMapW]float32{}
+	energyArr   = [heatMapH][heatMapW]float32{}
+	materialArr = [heatMapH][heatMapW]material{}
+
+	material_HeatCap = [NumberOfMaterials]float32{}
+	material_Conduct = [1 << NumberOfMaterials]float32{}
 )
 
 var (
-	heatMapRect     = sdl.Rect{marginW, marginN, heatMapW, heatMapH}
-	leftMouse_click = make(chan point, 100)
 	program_running = true
 	standardBrush   = BrushConstructor(10)
+	leftMouse_click = make(chan HeatMap_Event, 100)
 )
+type HeatMap_Event interface {
+	Draw_to_Arr()
+}
 
 type point struct {
 	X int32
 	Y int32
 }
+
+func (p point) Draw_to_Arr() {
+	// if the point is inside heatmap
+	if x, y := p.X - marginW, p.Y - marginN;
+	   0 <= x && x < heatMapW && 0 <= y && y < heatMapH {
+	   	// calculate the minimum distance to the wall
+		minumum_dist := x
+		for _, v := range [3]int32{y, heatMapW - x, heatMapH - y} {
+			if v < minumum_dist {
+				minumum_dist = v
+			}
+		}
+		if standardBrush.MaxRadius < minumum_dist {
+			for _, list := range standardBrush.Points {
+				energyArr[y+list[1]][x+list[0]] += 100
+			}
+		}
+	}
+}
+
 
 func initSDL() (err error) {
 	if err = sdl.Init(sdl.INIT_EVERYTHING); err != nil {
@@ -104,11 +141,90 @@ func main() {
 					leftMousePressed = true
 				} else {
 					leftMousePressed = false
-				}				
+				}
 			}
 		}
 	}
 	heatMap_wg.Wait()
+}
+
+
+func runHeatMap(func_wg *sync.WaitGroup) {
+	defer func_wg.Done()
+	var channel_empty bool
+	var elem HeatMap_Event
+
+	for program_running {
+		channel_empty = true
+		for channel_empty {
+			select {
+			case elem = <-leftMouse_click:
+				elem.Draw_to_Arr()
+			default:
+				channel_empty = false
+			}
+		}
+		heatFlow()
+		buildHeatmap()
+	}
+}
+
+func heatFlow() {
+	for i := 0; i < heatMapH; i++ {
+		for j := 1; j < heatMapW; j++ {
+			q := (energyArr[i][j] - energyArr[i][j-1]) / 2
+			energyArr[i][j] -= q
+			energyArr[i][j-1] += q
+		}
+	}
+	for i := 1; i < heatMapH; i++ {
+		for j := 0; j < heatMapW; j++ {
+			q := (energyArr[i][j] - energyArr[i-1][j]) / 2
+			energyArr[i][j] -= q
+			energyArr[i-1][j] += q
+		}
+	}
+}
+
+func buildHeatmap() {
+	bytes, _, err := tex.Lock(nil)
+	if err != nil {
+		panic(err)
+	}
+	for i, sublist := range energyArr {
+		for j, value := range sublist {
+			bytes[(heatMapW*i+j)*4] = uint8(value)
+		}
+	}
+	tex.Unlock()
+	renderer.Copy(tex, nil, heatMapRectPtr)
+	renderer.Present()
+}
+
+func stockAnimation() {
+	for offset := 0; offset < 512; offset++ {
+		// iterating through offset animates pattern
+		bytes, _, err := tex.Lock(nil)
+		if err != nil {
+			panic(err)
+		}
+
+		for i := 0; i < len(bytes); i += 4 {
+			// (i/4) % heatMapW + (i/4) / heatMapW represents the
+			// manhattan distance from the top left pixel
+			minus := (i / 4) - offset
+			plus := (i / 4) + offset
+			// byte() takes the last 8 bits of integer, eg. mod 256
+			bytes[i] = byte(minus%heatMapW + minus/heatMapW)
+			bytes[i+1] = byte(plus%heatMapW + plus/heatMapW)
+			bytes[i+2] = 0
+			bytes[i+3] = 255
+		}
+
+		tex.Unlock()
+		renderer.Copy(tex, nil, heatMapRectPtr)
+		renderer.Present()
+	}
 }
 
 type Brush struct {
@@ -151,102 +267,4 @@ func BrushConstructor(radii ...int32) Brush {
 		}
 	}
 	return Brush{array, max}
-}
-
-func runHeatMap(func_wg *sync.WaitGroup) {
-	defer func_wg.Done()
-	var channel_empty bool
-	var elem point
-
-	for program_running {
-		channel_empty = true
-		for channel_empty {
-			select {
-			case elem = <-leftMouse_click:
-				x, y := elem.X-marginW, elem.Y-marginN
-				if 0 <= x && x < heatMapW && 0 <= y && y < heatMapH {
-					heatMapClicked(x, y)
-				}
-
-			default:
-				channel_empty = false
-			}
-		}
-		heatFlow()
-		buildHeatmap()
-	}
-}
-
-func heatMapClicked(x int32, y int32) {
-	minumum_value := x
-	for _, v := range [3]int32{y, heatMapW - x, heatMapH - y} {
-		if v < minumum_value {
-			minumum_value = v
-		}
-	}
-	if standardBrush.MaxRadius < minumum_value {
-		for _, list := range standardBrush.Points {
-			energyArr[y+list[1]][x+list[0]] += 100
-		}
-	}
-}
-
-func heatFlow() {
-	for i := 0; i < heatMapH; i++ {
-		for j := 1; j < heatMapW; j++ {
-			q := (energyArr[i][j] - energyArr[i][j-1]) / 2
-			energyArr[i][j] -= q
-			energyArr[i][j-1] += q
-		}
-	}
-	for i := 1; i < heatMapH; i++ {
-		for j := 0; j < heatMapW; j++ {
-			q := (energyArr[i][j] - energyArr[i-1][j]) / 2
-			energyArr[i][j] -= q
-			energyArr[i-1][j] += q
-		}
-	}
-}
-
-
-func buildHeatmap() {
-	bytes, _, err := tex.Lock(nil)
-	if err != nil {
-		panic(err)
-	}
-	for i, sublist := range energyArr {
-		for j, value := range sublist {
-			bytes[(heatMapW*i+j)*4] = uint8(value)
-		}
-	}
-	tex.Unlock()
-	renderer.Copy(tex, nil, &heatMapRect)
-	renderer.Present()
-}
-
-func stockAnimation() {
-	for offset := 0; offset < 512; offset++ {
-		// iterating through offset animates pattern
-		bytes, _, err := tex.Lock(nil)
-		if err != nil {
-			panic(err)
-		}
-
-		for i := 0; i < len(bytes); i += 4 {
-			// (i/4) % heatMapW + (i/4) / heatMapW represents the
-			// manhattan distance from the top left pixel
-			minus := (i / 4) - offset
-			plus := (i / 4) + offset
-			// byte() takes the last 8 bits of integer, eg. mod 256
-			bytes[i] = byte(minus%heatMapW + minus/heatMapW)
-			bytes[i+1] = byte(plus%heatMapW + plus/heatMapW)
-			bytes[i+2] = 0
-			bytes[i+3] = 255
-		}
-
-		tex.Unlock()
-		renderer.Copy(tex, nil, &heatMapRect)
-		renderer.Present()
-		sdl.Delay(10)
-	}
 }
