@@ -29,59 +29,53 @@ var (
 	tex      *sdl.Texture
 	err      error
 
-	heatMapRectPtr  = &sdl.Rect{marginW, marginN, heatMapW, heatMapH}
+	heatMapRectPtr = &sdl.Rect{marginW, marginN, heatMapW, heatMapH}
 )
 
 type material byte
 
 const (
-	Metal material = 1 << iota
-	Plastic
+	Aluminium material = 1 << iota
 	Glass
-	NumberOfMaterials = iota
+	Water
+	MaxMaterials
 )
 
 var (
 	energyArr   = [heatMapH][heatMapW]float32{}
 	materialArr = [heatMapH][heatMapW]material{}
 
-	material_HeatCap = [NumberOfMaterials]float32{}
-	material_Conduct = [1 << NumberOfMaterials]float32{}
+	material_HeatCap = [MaxMaterials]float32{}
+	material_Conduct = [MaxMaterials]float32{}
 )
 
 var (
-	program_running = true
-	standardBrush   = BrushConstructor(10)
-	leftMouse_click = make(chan HeatMap_Event, 100)
+	program_running    = true
+	HeatMap_Event_chan = make(chan HeatMap_Event, 100)
+
+	standardBrush = BrushConstructor(10)
 )
-type HeatMap_Event interface {
-	Draw_to_Arr()
-}
 
-type point struct {
-	X int32
-	Y int32
-}
+func initMaterials() {
+	// Isobaric (volumetric) Heatcapacities
+	material_HeatCap[Aluminium] = 2.422 // J / cm^3 K
+	material_HeatCap[Glass] = 2.1       // J / cm^3 K
+	material_HeatCap[Water] = 4.179     // J / cm^3 K
 
-func (p point) Draw_to_Arr() {
-	// if the point is inside heatmap
-	if x, y := p.X - marginW, p.Y - marginN;
-	   0 <= x && x < heatMapW && 0 <= y && y < heatMapH {
-	   	// calculate the minimum distance to the wall
-		minumum_dist := x
-		for _, v := range [3]int32{y, heatMapW - x, heatMapH - y} {
-			if v < minumum_dist {
-				minumum_dist = v
-			}
-		}
-		if standardBrush.MaxRadius < minumum_dist {
-			for _, list := range standardBrush.Points {
-				energyArr[y+list[1]][x+list[0]] += 100
-			}
+	material_Conduct[Aluminium] = 205.0 // W / m K
+	material_Conduct[Glass] = 0.8       // W / m K
+	material_Conduct[Water] = 0.6       // W / m K
+
+	// iterate through all possible pairs of materials
+	for i := material(1); i < MaxMaterials; i <<= 1 {
+		for j := material(i) << 1; j < MaxMaterials; j <<= 1 {
+			// the material conductivity between i and j is equal to
+			material_Conduct[i|j] =
+				(material_Conduct[i] + material_Conduct[j]) / 2
+			// the average conductivities of i and j
 		}
 	}
 }
-
 
 func initSDL() (err error) {
 	if err = sdl.Init(sdl.INIT_EVERYTHING); err != nil {
@@ -118,7 +112,7 @@ func main() {
 	defer renderer.Destroy()
 	defer tex.Destroy()
 
-	leftMousePressed := false
+	initMaterials()
 
 	var heatMap_wg sync.WaitGroup
 	// HeatMap_wg prevents the program from executing deferred functions
@@ -126,18 +120,20 @@ func main() {
 	go runHeatMap(&heatMap_wg)
 	heatMap_wg.Add(1)
 
+	leftMousePressed := false
+
 	for program_running {
 		switch t := sdl.PollEvent().(type) {
 		case *sdl.QuitEvent:
 			program_running = false
 		case *sdl.MouseMotionEvent:
 			if leftMousePressed {
-				leftMouse_click <- point{t.X, t.Y}
+				HeatMap_Event_chan <- point{t.X, t.Y}
 			}
 		case *sdl.MouseButtonEvent:
 			if t.Button == sdl.BUTTON_LEFT {
 				if t.State == sdl.PRESSED {
-					leftMouse_click <- point{t.X, t.Y}
+					HeatMap_Event_chan <- point{t.X, t.Y}
 					leftMousePressed = true
 				} else {
 					leftMousePressed = false
@@ -148,7 +144,6 @@ func main() {
 	heatMap_wg.Wait()
 }
 
-
 func runHeatMap(func_wg *sync.WaitGroup) {
 	defer func_wg.Done()
 	var channel_empty bool
@@ -158,7 +153,7 @@ func runHeatMap(func_wg *sync.WaitGroup) {
 		channel_empty = true
 		for channel_empty {
 			select {
-			case elem = <-leftMouse_click:
+			case elem = <-HeatMap_Event_chan:
 				elem.Draw_to_Arr()
 			default:
 				channel_empty = false
@@ -268,3 +263,37 @@ func BrushConstructor(radii ...int32) Brush {
 	}
 	return Brush{array, max}
 }
+
+type HeatMap_Event interface {
+	Draw_to_Arr()
+}
+
+type point struct {
+	X int32
+	Y int32
+}
+
+func (p point) Draw_to_Arr() {
+	// if the point is inside heatmap
+	if x, y := p.X-marginW, p.Y-marginN; 0 <= x && x < heatMapW && 0 <= y && y < heatMapH {
+		// calculate the minimum distance to the wall
+		minumum_dist := x
+		for _, v := range [3]int32{y, heatMapW - x, heatMapH - y} {
+			if v < minumum_dist {
+				minumum_dist = v
+			}
+		}
+		if standardBrush.MaxRadius < minumum_dist {
+			for _, list := range standardBrush.Points {
+				energyArr[y+list[1]][x+list[0]] += 100
+			}
+		}
+	}
+}
+
+// type Set_Rect struct {
+// 	X int32
+// 	Y int32
+// 	W int32
+// 	H int32
+// }
