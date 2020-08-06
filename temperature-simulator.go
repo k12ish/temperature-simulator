@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"github.com/veandco/go-sdl2/gfx"
 	"github.com/veandco/go-sdl2/sdl"
+	"math"
 	"os"
 	"sync"
-	"math"
 )
 
 const (
@@ -15,12 +15,15 @@ const (
 	marginS = 40
 	marginW = 15
 
-	heatMapW = 500
-	heatMapH = 457
+	heatMapW = 150
+	heatMapH = 155
 
 	winTitle  = "Temperature Simulator"
 	winHeight = marginN + heatMapH + marginS
 	winWidth  = marginW + heatMapW + marginE
+
+	VIEW_TEMPERATURE = iota
+	VIEW_MATERIAL
 )
 
 // initialized by initSDL()
@@ -47,41 +50,42 @@ var (
 	temperArr   = [heatMapH][heatMapW]float32{}
 	materialArr = [heatMapH][heatMapW]material{}
 
-	material_HeatCap = [MaxMaterials]float32{}
-	material_Conduct = [MaxMaterials]float32{}
+	heatCapacity = [MaxMaterials]float32{}
+	conductivity = [MaxMaterials]float32{}
 )
 
 var (
-	program_running    = true
-	HeatMap_Event_chan = make(chan HeatMap_Event, 100)
+	program_running = true
+	program_view    = VIEW_TEMPERATURE
 
-	standardBrush = BrushConstructor(10)
+	HeatMap_Event_chan = make(chan HeatMap_Event, 100)
+	standardBrush      = BrushConstructor(10)
 )
 
 func initMaterials() {
 	// Isobaric (volumetric) Heatcapacities
-	material_HeatCap[Aluminium] = 2.422 // J / cm^3 K
-	material_HeatCap[Glass] = 2.1       // J / cm^3 K
-	material_HeatCap[Water] = 4.179     // J / cm^3 K
+	heatCapacity[Aluminium] = 2.422 // J / cm^3 K
+	heatCapacity[Glass] = 2.1       // J / cm^3 K
+	heatCapacity[Water] = 4.179     // J / cm^3 K
 
-	material_Conduct[Aluminium] = 205.0 / 100 // W / m K
-	material_Conduct[Glass] = 0.8 / 100       // W / m K
-	material_Conduct[Water] = 0.6 / 100       // W / m K
+	conductivity[Aluminium] = 205.0 / 100 // W / m K
+	conductivity[Glass] = 0.8 / 100       // W / m K
+	conductivity[Water] = 0.6 / 100       // W / m K
 
 	// iterate through all possible pairs of materials
 	for i := material(1); i < MaxMaterials; i <<= 1 {
 		for j := material(i) << 1; j < MaxMaterials; j <<= 1 {
 			// the material conductivity between i and j is equal to
-			material_Conduct[i|j] =
-				(material_Conduct[i] + material_Conduct[j]) / 2
+			conductivity[i|j] = conductivity[i] + conductivity[j]
+			conductivity[i|j] /= 2
 			// the average conductivities of i and j
 		}
 	}
 
 	for i := range materialArr {
 		for j := range materialArr[i] {
-			if j > int(heatMapW/2){
-				materialArr[i][j] = Glass				
+			if j > int(heatMapW/2) {
+				materialArr[i][j] = Glass
 			} else {
 				materialArr[i][j] = Aluminium
 			}
@@ -127,10 +131,9 @@ func main() {
 	initMaterials()
 
 	var heatMap_wg sync.WaitGroup
-	// HeatMap_wg prevents the program from executing deferred functions
-	// Prevents texture being destroyed while runHeatMap() is running
 	go runHeatMap(&heatMap_wg)
 	heatMap_wg.Add(1)
+	// Prevents texture being destroyed while runHeatMap() is running
 
 	leftMousePressed := false
 	var rightMousePrevious point
@@ -157,19 +160,29 @@ func main() {
 					rightMousePrevious.Y = t.Y
 				} else {
 					HeatMap_Event_chan <- Set_Rect{
-						X1: rightMousePrevious.X,
-						Y1: rightMousePrevious.Y,
-						X2: t.X,
-						Y2: t.Y,
-						Set_value: Aluminium,
+						X1:    rightMousePrevious.X,
+						Y1:    rightMousePrevious.Y,
+						X2:    t.X,
+						Y2:    t.Y,
+						Value: Aluminium,
 					}
+				}
+			}
+		case *sdl.KeyboardEvent:
+			keyCode := t.Keysym.Sym
+			fmt.Println(string(keyCode))
+			switch string(keyCode) {
+			case " ":
+				switch program_view {
+				case VIEW_TEMPERATURE:
+					program_view = VIEW_MATERIAL
+				case VIEW_MATERIAL:
+					program_view = VIEW_TEMPERATURE
 				}
 			}
 		}
 	}
 	heatMap_wg.Wait()
-	fmt.Println(temperArr[1])
-	fmt.Println(energyArr[1])
 }
 
 func runHeatMap(func_wg *sync.WaitGroup) {
@@ -187,8 +200,13 @@ func runHeatMap(func_wg *sync.WaitGroup) {
 				channel_empty = false
 			}
 		}
-		heatFlow()
-		buildHeatmap()
+		switch program_view {
+		case VIEW_TEMPERATURE:
+			heatFlow()
+			showTemperature()
+		case VIEW_MATERIAL:
+			showMaterial()
+		}
 	}
 }
 
@@ -196,9 +214,9 @@ func heatFlow() {
 	for i := 0; i < heatMapH; i++ {
 		for j := 1; j < heatMapW; j++ {
 			q := (temperArr[i][j] - temperArr[i][j-1]) *
-			    material_Conduct[materialArr[i][j]|materialArr[i][j-1]] *
-			    0.1
-			if math.IsNaN(float64(q)){
+				conductivity[materialArr[i][j]|materialArr[i][j-1]] *
+				0.1
+			if math.IsNaN(float64(q)) {
 				fmt.Println("NaN error")
 				return
 			}
@@ -209,9 +227,9 @@ func heatFlow() {
 	for i := 1; i < heatMapH; i++ {
 		for j := 0; j < heatMapW; j++ {
 			q := (temperArr[i][j] - temperArr[i-1][j]) *
-			    material_Conduct[materialArr[i][j]|materialArr[i-1][j]] *
-			    0.1
-			if math.IsNaN(float64(q)){
+				conductivity[materialArr[i][j]|materialArr[i-1][j]] *
+				0.1
+			if math.IsNaN(float64(q)) {
 				fmt.Println("NaN error")
 				return
 			}
@@ -221,12 +239,12 @@ func heatFlow() {
 	}
 	for i := range energyArr {
 		for j := range energyArr[i] {
-			temperArr[i][j] = energyArr[i][j] / material_HeatCap[materialArr[i][j]]
+			temperArr[i][j] = energyArr[i][j] / heatCapacity[materialArr[i][j]]
 		}
 	}
 }
 
-func buildHeatmap() {
+func showTemperature() {
 	bytes, _, err := tex.Lock(nil)
 	if err != nil {
 		panic(err)
@@ -234,6 +252,21 @@ func buildHeatmap() {
 	for i, sublist := range temperArr {
 		for j, value := range sublist {
 			bytes[(heatMapW*i+j)*4] = uint8(value)
+		}
+	}
+	tex.Unlock()
+	renderer.Copy(tex, nil, heatMapRectPtr)
+	renderer.Present()
+}
+
+func showMaterial() {
+	bytes, _, err := tex.Lock(nil)
+	if err != nil {
+		panic(err)
+	}
+	for i, sublist := range temperArr {
+		for j, value := range sublist {
+			bytes[(heatMapW*i+j)*4+1] = uint8(value)
 		}
 	}
 	tex.Unlock()
@@ -309,14 +342,13 @@ func BrushConstructor(radii ...int32) Brush {
 	return Brush{array, max}
 }
 
-
 type HeatMap_Event interface {
 	Draw_to_Arr()
 }
 
 func rel_to_heatMap(X int32, Y int32) (x, y int32, inside bool) {
 	// inlined by compiler -- no function call overhead
-	x, y = X - marginW, Y - marginN
+	x, y = X-marginW, Y-marginN
 	inside = 0 <= x && x < heatMapW && 0 <= y && y < heatMapH
 	return
 }
@@ -338,18 +370,18 @@ func (p point) Draw_to_Arr() {
 		}
 		if standardBrush.MaxRadius < minumum_dist {
 			for _, list := range standardBrush.Points {
-				energyArr[y+list[1]][x+list[0]] += material_HeatCap[Water]
+				energyArr[y+list[1]][x+list[0]] += heatCapacity[Water] * 10
 			}
 		}
 	}
 }
 
 type Set_Rect struct {
-	X1 int32
-	Y1 int32
-	X2 int32
-	Y2 int32
-	Set_value interface{}
+	X1    int32
+	Y1    int32
+	X2    int32
+	Y2    int32
+	Value interface{}
 }
 
 func (r Set_Rect) Draw_to_Arr() {
@@ -358,7 +390,20 @@ func (r Set_Rect) Draw_to_Arr() {
 	if !inside1 || !inside2 {
 		return
 	}
-	fmt.Println("astahu")
-
-	_ = x1 + x2 + y1 + y2
+	if x1 > x2 {
+		x1, x2 = x2, x1
+	}
+	if y1 > y2 {
+		y1, y2 = y2, y1
+	}
+	switch r.Value.(type) {
+	case material:
+		for y := y1; y <= y2; y++ {
+			for x := x1; x <= x2; x++ {
+				materialArr[y][x] = r.Value.(material)
+			}
+		}
+	default:
+		fmt.Println("Set_Rect recieved unsupported type")
+	}
 }
