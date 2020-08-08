@@ -21,20 +21,44 @@ const (
 	winTitle  = "Temperature Simulator"
 	winHeight = marginN + heatMapH + marginS
 	winWidth  = marginW + heatMapW + marginE
-
-	VIEW_TEMPERATURE = iota
-	VIEW_MATERIAL
 )
 
-// initialized by initSDL()
 var (
+	// initialized by initSDL()
 	window   *sdl.Window
 	renderer *sdl.Renderer
 	tex      *sdl.Texture
 	err      error
 
-	heatMapRectPtr = &sdl.Rect{marginW, marginN, heatMapW, heatMapH}
+	// misc
+	heatMapRectPtr     = &sdl.Rect{marginW, marginN, heatMapW, heatMapH}
+	program_running    = true
+	HeatMap_Event_chan = make(chan HeatMap_Event, 100)
+	standardBrush      = BrushConstructor(10)
 )
+
+type viewType byte
+
+var program_view viewType
+
+const (
+	TEMPERATURE_VIEW viewType = iota
+	MATERIAL_VIEW
+	SWITCH_VIEW
+)
+
+func (view viewType) Draw_to_Arr() {
+	if view == SWITCH_VIEW {
+		switch program_view {
+		case TEMPERATURE_VIEW:
+			program_view = MATERIAL_VIEW
+		case MATERIAL_VIEW:
+			program_view = TEMPERATURE_VIEW
+		}
+	} else {
+		program_view = view
+	}
+}
 
 type material byte
 
@@ -52,14 +76,6 @@ var (
 
 	heatCapacity = [MaxMaterials]float32{}
 	conductivity = [MaxMaterials]float32{}
-)
-
-var (
-	program_running = true
-	program_view    = VIEW_TEMPERATURE
-
-	HeatMap_Event_chan = make(chan HeatMap_Event, 100)
-	standardBrush      = BrushConstructor(10)
 )
 
 func initMaterials() {
@@ -173,11 +189,8 @@ func main() {
 			fmt.Println(string(keyCode))
 			switch string(keyCode) {
 			case " ":
-				switch program_view {
-				case VIEW_TEMPERATURE:
-					program_view = VIEW_MATERIAL
-				case VIEW_MATERIAL:
-					program_view = VIEW_TEMPERATURE
+				if t.State == sdl.PRESSED {
+					HeatMap_Event_chan <- SWITCH_VIEW
 				}
 			}
 		}
@@ -201,10 +214,11 @@ func runHeatMap(func_wg *sync.WaitGroup) {
 			}
 		}
 		switch program_view {
-		case VIEW_TEMPERATURE:
+		case TEMPERATURE_VIEW:
 			heatFlow()
 			showTemperature()
-		case VIEW_MATERIAL:
+		case MATERIAL_VIEW:
+			heatFlow()
 			showMaterial()
 		}
 	}
@@ -314,36 +328,25 @@ func BrushConstructor(radii ...int32) Brush {
 			max = r
 		}
 		squared = r * r
-		for i := int32(0); i <= r; i++ {
-			for j := int32(0); j <= r; j++ {
+		array = append(array, [2]int32{0, 0})
+		for j := int32(1); j <= r; j++ {
+			array = append(array, [2]int32{0, j}, [2]int32{0, -j})
+		}
+		for i := int32(1); i <= r; i++ {
+			array = append(array, [2]int32{i, 0}, [2]int32{-i, 0})
+		}
+		for i := int32(1); i <= r; i++ {
+			for j := int32(1); j <= r; j++ {
 				if i*i+j*j > squared {
 					continue
 				}
-				if j != 0 {
-					if i != 0 {
-						array = append(array,
-							[2]int32{i, j}, [2]int32{i, -j},
-							[2]int32{-i, j}, [2]int32{-i, -j})
-					} else {
-						array = append(array,
-							[2]int32{i, j}, [2]int32{i, -j})
-					}
-				} else {
-					if i != 0 {
-						array = append(array,
-							[2]int32{i, j}, [2]int32{-i, j})
-					} else {
-						array = append(array, [2]int32{i, j})
-					}
-				}
+				array = append(array,
+					[2]int32{i, j}, [2]int32{i, -j},
+					[2]int32{-i, j}, [2]int32{-i, -j})
 			}
 		}
 	}
 	return Brush{array, max}
-}
-
-type HeatMap_Event interface {
-	Draw_to_Arr()
 }
 
 func rel_to_heatMap(X int32, Y int32) (x, y int32, inside bool) {
@@ -351,6 +354,10 @@ func rel_to_heatMap(X int32, Y int32) (x, y int32, inside bool) {
 	x, y = X-marginW, Y-marginN
 	inside = 0 <= x && x < heatMapW && 0 <= y && y < heatMapH
 	return
+}
+
+type HeatMap_Event interface {
+	Draw_to_Arr()
 }
 
 type point struct {
