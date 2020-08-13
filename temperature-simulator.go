@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"github.com/veandco/go-sdl2/gfx"
 	"github.com/veandco/go-sdl2/sdl"
-	"math"
 	"os"
 	"sync"
 )
@@ -16,7 +15,7 @@ const (
 	marginW = 15
 
 	heatMapW = 150
-	heatMapH = 155
+	heatMapH = 150
 
 	winTitle  = "Temperature Simulator"
 	winHeight = marginN + heatMapH + marginS
@@ -69,10 +68,17 @@ const (
 	MaxMaterials
 )
 
+type Element struct {
+	material material
+	energy   float32
+}
+
+func (E Element) Temperature() float32 {
+	return E.energy / heatCapacity[E.material]
+}
+
 var (
-	energyArr   = [heatMapH][heatMapW]float32{}
-	temperArr   = [heatMapH][heatMapW]float32{}
-	materialArr = [heatMapH][heatMapW]material{}
+	elementArr = [heatMapH][heatMapW]Element{}
 
 	heatCapacity = [MaxMaterials]float32{}
 	conductivity = [MaxMaterials]float32{}
@@ -88,7 +94,7 @@ func initMaterials() {
 	conductivity[Glass] = 0.8 / 100       // W / m K
 	conductivity[Water] = 0.6 / 100       // W / m K
 
-	// iterate through all possible pairs of materials
+	// iterate through all possible pairs of material elements
 	for i := material(1); i < MaxMaterials; i <<= 1 {
 		for j := material(i) << 1; j < MaxMaterials; j <<= 1 {
 			// the material conductivity between i and j is equal to
@@ -98,12 +104,12 @@ func initMaterials() {
 		}
 	}
 
-	for i := range materialArr {
-		for j := range materialArr[i] {
-			if j > int(heatMapW/2) {
-				materialArr[i][j] = Glass
+	for i := range elementArr {
+		for j := range elementArr[i] {
+			if j < int(heatMapW/2) {
+				elementArr[i][j].material = Aluminium
 			} else {
-				materialArr[i][j] = Aluminium
+				elementArr[i][j].material = Glass
 			}
 		}
 	}
@@ -143,15 +149,14 @@ func main() {
 	defer window.Destroy()
 	defer renderer.Destroy()
 	defer tex.Destroy()
-
 	initMaterials()
 
+	// Prevent texture deletion while runHeatMap() is running
 	var heatMap_wg sync.WaitGroup
 	go runHeatMap(&heatMap_wg)
 	heatMap_wg.Add(1)
-	// Prevents texture being destroyed while runHeatMap() is running
 
-	leftMousePressed := false
+	var leftMousePressed bool
 	var rightMousePrevious point
 
 	for program_running {
@@ -180,8 +185,7 @@ func main() {
 						Y1:    rightMousePrevious.Y,
 						X2:    t.X,
 						Y2:    t.Y,
-						Value: Aluminium,
-					}
+						Value: Aluminium}
 				}
 			}
 		case *sdl.KeyboardEvent:
@@ -201,14 +205,14 @@ func main() {
 func runHeatMap(func_wg *sync.WaitGroup) {
 	defer func_wg.Done()
 	var channel_empty bool
-	var elem HeatMap_Event
+	var event HeatMap_Event
 
 	for program_running {
 		channel_empty = true
 		for channel_empty {
 			select {
-			case elem = <-HeatMap_Event_chan:
-				elem.Draw_to_Arr()
+			case event = <-HeatMap_Event_chan:
+				event.Draw_to_Arr()
 			default:
 				channel_empty = false
 			}
@@ -227,33 +231,24 @@ func runHeatMap(func_wg *sync.WaitGroup) {
 func heatFlow() {
 	for i := 0; i < heatMapH; i++ {
 		for j := 1; j < heatMapW; j++ {
-			q := (temperArr[i][j] - temperArr[i][j-1]) *
-				conductivity[materialArr[i][j]|materialArr[i][j-1]] *
-				0.1
-			if math.IsNaN(float64(q)) {
-				fmt.Println("NaN error")
-				return
-			}
-			energyArr[i][j] -= q
-			energyArr[i][j-1] += q
+			a, b := elementArr[i][j], elementArr[i][j-1]
+			q := (a.Temperature() - b.Temperature()) *
+				conductivity[a.material|b.material] *
+				0.05
+
+			elementArr[i][j].energy -= q
+			elementArr[i][j-1].energy += q
 		}
 	}
 	for i := 1; i < heatMapH; i++ {
 		for j := 0; j < heatMapW; j++ {
-			q := (temperArr[i][j] - temperArr[i-1][j]) *
-				conductivity[materialArr[i][j]|materialArr[i-1][j]] *
-				0.1
-			if math.IsNaN(float64(q)) {
-				fmt.Println("NaN error")
-				return
-			}
-			energyArr[i][j] -= q
-			energyArr[i-1][j] += q
-		}
-	}
-	for i := range energyArr {
-		for j := range energyArr[i] {
-			temperArr[i][j] = energyArr[i][j] / heatCapacity[materialArr[i][j]]
+			a, b := elementArr[i][j], elementArr[i-1][j]
+			q := (a.Temperature() - b.Temperature()) *
+				conductivity[a.material|b.material] *
+				0.05
+
+			elementArr[i][j].energy -= q
+			elementArr[i-1][j].energy += q
 		}
 	}
 }
@@ -263,9 +258,9 @@ func showTemperature() {
 	if err != nil {
 		panic(err)
 	}
-	for i, sublist := range temperArr {
+	for i, sublist := range elementArr {
 		for j, value := range sublist {
-			bytes[(heatMapW*i+j)*4] = uint8(value)
+			bytes[(heatMapW*i+j)*4] = uint8(value.Temperature())
 		}
 	}
 	tex.Unlock()
@@ -278,9 +273,9 @@ func showMaterial() {
 	if err != nil {
 		panic(err)
 	}
-	for i, sublist := range temperArr {
+	for i, sublist := range elementArr {
 		for j, value := range sublist {
-			bytes[(heatMapW*i+j)*4+1] = uint8(value)
+			bytes[(heatMapW*i+j)*4+1] = uint8(value.Temperature())
 		}
 	}
 	tex.Unlock()
@@ -337,9 +332,7 @@ func BrushConstructor(radii ...int32) Brush {
 		}
 		for i := int32(1); i <= r; i++ {
 			for j := int32(1); j <= r; j++ {
-				if i*i+j*j > squared {
-					continue
-				}
+				if i*i+j*j > squared { continue }
 				array = append(array,
 					[2]int32{i, j}, [2]int32{i, -j},
 					[2]int32{-i, j}, [2]int32{-i, -j})
@@ -376,8 +369,8 @@ func (p point) Draw_to_Arr() {
 			}
 		}
 		if standardBrush.MaxRadius < minumum_dist {
-			for _, list := range standardBrush.Points {
-				energyArr[y+list[1]][x+list[0]] += heatCapacity[Water] * 10
+			for _, l := range standardBrush.Points {
+				elementArr[y+l[1]][x+l[0]].energy += heatCapacity[Water] * 5
 			}
 		}
 	}
@@ -407,7 +400,7 @@ func (r Set_Rect) Draw_to_Arr() {
 	case material:
 		for y := y1; y <= y2; y++ {
 			for x := x1; x <= x2; x++ {
-				materialArr[y][x] = r.Value.(material)
+				elementArr[y][x].material = r.Value.(material)
 			}
 		}
 	default:
