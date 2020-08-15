@@ -74,14 +74,15 @@ type Element struct {
 }
 
 func (E Element) Temperature() float32 {
-	return E.energy / heatCapacity[E.material]
+	return E.energy * recip_heatCapacity[E.material]
 }
 
 var (
 	elementArr = [heatMapH][heatMapW]Element{}
 
-	heatCapacity = [MaxMaterials]float32{}
-	conductivity = [MaxMaterials]float32{}
+	heatCapacity       = [MaxMaterials]float32{}
+	recip_heatCapacity = [MaxMaterials]float32{}
+	conductivity       = [MaxMaterials]float32{}
 )
 
 func initMaterials() {
@@ -90,9 +91,10 @@ func initMaterials() {
 	heatCapacity[Glass] = 2.1       // J / cm^3 K
 	heatCapacity[Water] = 4.179     // J / cm^3 K
 
-	conductivity[Aluminium] = 205.0 / 100 // W / m K
-	conductivity[Glass] = 0.8 / 100       // W / m K
-	conductivity[Water] = 0.6 / 100       // W / m K
+	// Thermal conductivies
+	conductivity[Aluminium] = 205.0 / 100 // W / cm K
+	conductivity[Glass] = 0.8 / 100       // W / cm K
+	conductivity[Water] = 0.6 / 100       // W / cm K
 
 	// iterate through all possible pairs of material elements
 	for i := material(1); i < MaxMaterials; i <<= 1 {
@@ -102,6 +104,10 @@ func initMaterials() {
 			conductivity[i|j] /= 2
 			// the average conductivities of i and j
 		}
+	}
+
+	for i := range heatCapacity {
+		recip_heatCapacity[i] = 1 / heatCapacity[i]
 	}
 
 	for i := range elementArr {
@@ -332,7 +338,9 @@ func BrushConstructor(radii ...int32) Brush {
 		}
 		for i := int32(1); i <= r; i++ {
 			for j := int32(1); j <= r; j++ {
-				if i*i+j*j > squared { continue }
+				if i*i+j*j > squared {
+					continue
+				}
 				array = append(array,
 					[2]int32{i, j}, [2]int32{i, -j},
 					[2]int32{-i, j}, [2]int32{-i, -j})
