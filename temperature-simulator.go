@@ -14,8 +14,8 @@ const (
 	marginS = 40
 	marginW = 15
 
-	heatMapW = 150
-	heatMapH = 150
+	heatMapW = 400
+	heatMapH = 400
 
 	winTitle  = "Temperature Simulator"
 	winHeight = marginN + heatMapH + marginS
@@ -36,29 +36,6 @@ var (
 	standardBrush      = BrushConstructor(10)
 )
 
-type viewType byte
-
-var program_view viewType
-
-const (
-	TEMPERATURE_VIEW viewType = iota
-	MATERIAL_VIEW
-	SWITCH_VIEW
-)
-
-func (view viewType) Draw_to_Arr() {
-	if view == SWITCH_VIEW {
-		switch program_view {
-		case TEMPERATURE_VIEW:
-			program_view = MATERIAL_VIEW
-		case MATERIAL_VIEW:
-			program_view = TEMPERATURE_VIEW
-		}
-	} else {
-		program_view = view
-	}
-}
-
 type material byte
 
 const (
@@ -67,6 +44,12 @@ const (
 	Water
 	MaxMaterials
 )
+
+var selected_material = material(1)
+
+func (m material) Draw_to_Arr() {
+	selected_material = m
+}
 
 type Element struct {
 	material material
@@ -92,21 +75,25 @@ func initMaterials() {
 	heatCapacity[Water] = 4.179     // J / cm^3 K
 
 	// Thermal conductivies
-	conductivity[Aluminium] = 205.0 / 100 // W / cm K
-	conductivity[Glass] = 0.8 / 100       // W / cm K
-	conductivity[Water] = 0.6 / 100       // W / cm K
+	conductivity[Aluminium] = 205.0 // W / cm K
+	conductivity[Glass] = 0.8       // W / cm K
+	conductivity[Water] = 0.6       // W / cm K
 
 	// iterate through all possible pairs of material elements
 	for i := material(1); i < MaxMaterials; i <<= 1 {
 		for j := material(i) << 1; j < MaxMaterials; j <<= 1 {
 			// the material conductivity between i and j is equal to
+			// the average conductivities of i and j
 			conductivity[i|j] = conductivity[i] + conductivity[j]
 			conductivity[i|j] /= 2
-			// the average conductivities of i and j
 		}
 	}
-
+	for i := range conductivity {
+		// premultiply by sidelength of cubic element
+		conductivity[i] *= 0.01
+	}
 	for i := range heatCapacity {
+		// storing calculated values reduces FLOPS
 		recip_heatCapacity[i] = 1 / heatCapacity[i]
 	}
 
@@ -191,16 +178,43 @@ func main() {
 						Y1:    rightMousePrevious.Y,
 						X2:    t.X,
 						Y2:    t.Y,
-						Value: Aluminium}
+						Value: selected_material}
 				}
 			}
 		case *sdl.KeyboardEvent:
 			keyCode := t.Keysym.Sym
-			fmt.Println(string(keyCode))
+			// fmt.Println(string(keyCode))
 			switch string(keyCode) {
 			case " ":
 				if t.State == sdl.PRESSED {
 					HeatMap_Event_chan <- SWITCH_VIEW
+				}
+			case "r":
+				HeatMap_Event_chan <- Set_Rect{
+					X1:    marginW,
+					Y1:    marginN,
+					X2:    marginW + heatMapW - 1,
+					Y2:    marginN + heatMapH - 1,
+					Value: float32(0)}
+			case "1":
+				if material(1) < MaxMaterials {
+					HeatMap_Event_chan <- material(1)
+				}
+			case "2":
+				if material(2) < MaxMaterials {
+					HeatMap_Event_chan <- material(2)
+				}
+			case "3":
+				if material(4) < MaxMaterials {
+					HeatMap_Event_chan <- material(4)
+				}
+			case "4":
+				if material(8) < MaxMaterials {
+					HeatMap_Event_chan <- material(8)
+				}
+			case "5":
+				if material(16) < MaxMaterials {
+					HeatMap_Event_chan <- material(16)
 				}
 			}
 		}
@@ -259,6 +273,48 @@ func heatFlow() {
 	}
 }
 
+type viewType byte
+
+var program_view viewType = TEMPERATURE_VIEW
+
+const (
+	TEMPERATURE_VIEW viewType = iota
+	MATERIAL_VIEW
+	SWITCH_VIEW
+)
+
+func (view viewType) Draw_to_Arr() {
+	if program_view == view {
+		return
+	}
+
+	if view == SWITCH_VIEW {
+		switch program_view {
+		case TEMPERATURE_VIEW:
+			program_view = MATERIAL_VIEW
+		case MATERIAL_VIEW:
+			program_view = TEMPERATURE_VIEW
+		}
+	} else {
+		program_view = view
+	}
+	// If the view has changed, then set the texture to black
+	bytes, _, err := tex.Lock(nil)
+	if err != nil {
+		panic(err)
+	}
+	for i := range elementArr {
+		for j := range elementArr[i] {
+			bytes[(heatMapW*i+j)*4] = 0
+			bytes[(heatMapW*i+j)*4+1] = 0
+			bytes[(heatMapW*i+j)*4+2] = 0
+		}
+	}
+	tex.Unlock()
+	renderer.Copy(tex, nil, heatMapRectPtr)
+	renderer.Present()
+}
+
 func showTemperature() {
 	bytes, _, err := tex.Lock(nil)
 	if err != nil {
@@ -280,8 +336,30 @@ func showMaterial() {
 		panic(err)
 	}
 	for i, sublist := range elementArr {
+		heatMapW_star_i := heatMapW * i
 		for j, value := range sublist {
-			bytes[(heatMapW*i+j)*4+1] = uint8(value.Temperature())
+			switch value.material {
+			case material(1):
+				bytes[(heatMapW_star_i+j)*4] = uint8(140)
+				bytes[(heatMapW_star_i+j)*4+1] = uint8(138)
+				bytes[(heatMapW_star_i+j)*4+2] = uint8(232)
+			case material(2):
+				bytes[(heatMapW_star_i+j)*4] = uint8(193)
+				bytes[(heatMapW_star_i+j)*4+1] = uint8(198)
+				bytes[(heatMapW_star_i+j)*4+2] = uint8(75)
+			case material(4):
+				bytes[(heatMapW_star_i+j)*4] = uint8(227)
+				bytes[(heatMapW_star_i+j)*4+1] = uint8(103)
+				bytes[(heatMapW_star_i+j)*4+2] = uint8(189)
+			case material(8):
+				bytes[(heatMapW_star_i+j)*4] = uint8(106)
+				bytes[(heatMapW_star_i+j)*4+1] = uint8(208)
+				bytes[(heatMapW_star_i+j)*4+2] = uint8(122)
+			default:
+				bytes[(heatMapW_star_i+j)*4] = uint8(226)
+				bytes[(heatMapW_star_i+j)*4+1] = uint8(124)
+				bytes[(heatMapW_star_i+j)*4+2] = uint8(75)
+			}
 		}
 	}
 	tex.Unlock()
@@ -370,15 +448,19 @@ func (p point) Draw_to_Arr() {
 	// if the point is inside heatmap
 	if x, y, inside := rel_to_heatMap(p.X, p.Y); inside {
 		// calculate the minimum distance to the wall
-		minumum_dist := x
-		for _, v := range [3]int32{y, heatMapW - x, heatMapH - y} {
-			if v < minumum_dist {
-				minumum_dist = v
+		for _, v := range [...]int32{x, y, heatMapW - x, heatMapH - y} {
+			if standardBrush.MaxRadius >= v {
+				return
 			}
 		}
-		if standardBrush.MaxRadius < minumum_dist {
+		switch program_view {
+		case TEMPERATURE_VIEW:
 			for _, l := range standardBrush.Points {
 				elementArr[y+l[1]][x+l[0]].energy += heatCapacity[Water] * 5
+			}
+		case MATERIAL_VIEW:
+			for _, l := range standardBrush.Points {
+				elementArr[y+l[1]][x+l[0]].material = selected_material
 			}
 		}
 	}
@@ -411,7 +493,13 @@ func (r Set_Rect) Draw_to_Arr() {
 				elementArr[y][x].material = r.Value.(material)
 			}
 		}
+	case float32:
+		for y := y1; y <= y2; y++ {
+			for x := x1; x <= x2; x++ {
+				elementArr[y][x].energy = r.Value.(float32)
+			}
+		}
 	default:
-		fmt.Println("Set_Rect recieved unsupported type")
+		panic("Set_Rect recieved unsupported type")
 	}
 }
