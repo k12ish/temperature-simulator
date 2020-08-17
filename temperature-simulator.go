@@ -74,6 +74,11 @@ func initMaterials() {
 	heatCapacity[Glass] = 2.1       // J / cm^3 K
 	heatCapacity[Water] = 4.179     // J / cm^3 K
 
+	for i := range heatCapacity {
+		// storing calculated values reduces FLOPS
+		recip_heatCapacity[i] = 1 / heatCapacity[i]
+	}
+
 	// Thermal conductivies
 	conductivity[Aluminium] = 205.0 // W / cm K
 	conductivity[Glass] = 0.8       // W / cm K
@@ -88,13 +93,10 @@ func initMaterials() {
 			conductivity[i|j] /= 2
 		}
 	}
+
 	for i := range conductivity {
 		// premultiply by sidelength of cubic element
 		conductivity[i] *= 0.01
-	}
-	for i := range heatCapacity {
-		// storing calculated values reduces FLOPS
-		recip_heatCapacity[i] = 1 / heatCapacity[i]
 	}
 
 	for i := range elementArr {
@@ -135,6 +137,38 @@ func initSDL() (err error) {
 }
 
 func main() {
+	var channel_empty bool
+	var event HeatMap_Event
+	var main_thread sync.WaitGroup
+	// Delay destruction of texture until texture not needed
+	go parseUserInput(&main_thread)
+	main_thread.Add(1)
+
+	initMaterials()
+	event = <-HeatMap_Event_chan
+
+	for program_running {
+		channel_empty = true
+		for channel_empty {
+			select {
+			case event = <-HeatMap_Event_chan:
+				event.Draw_to_Arr()
+			default:
+				channel_empty = false
+			}
+		}
+		switch program_view {
+		case TEMPERATURE_VIEW:
+			heatFlow()
+			showTemperature()
+		case MATERIAL_VIEW:
+			showMaterial()
+		}
+	}
+	main_thread.Done()
+}
+
+func parseUserInput(main_thread *sync.WaitGroup) {
 	if initSDL() != nil {
 		return
 	}
@@ -142,15 +176,11 @@ func main() {
 	defer window.Destroy()
 	defer renderer.Destroy()
 	defer tex.Destroy()
-	initMaterials()
-
-	// Prevent texture deletion while runHeatMap() is running
-	var heatMap_wg sync.WaitGroup
-	go runHeatMap(&heatMap_wg)
-	heatMap_wg.Add(1)
 
 	var leftMousePressed bool
-	var rightMousePrevious point
+	var rightMousePreviousX int32
+	var rightMousePreviousY int32
+	HeatMap_Event_chan <- nil
 
 	for program_running {
 		switch t := sdl.PollEvent().(type) {
@@ -170,26 +200,26 @@ func main() {
 				}
 			} else if t.Button == sdl.BUTTON_RIGHT {
 				if t.State == sdl.PRESSED {
-					rightMousePrevious.X = t.X
-					rightMousePrevious.Y = t.Y
+					rightMousePreviousX = t.X
+					rightMousePreviousY = t.Y
 				} else {
 					HeatMap_Event_chan <- Set_Rect{
-						X1:    rightMousePrevious.X,
-						Y1:    rightMousePrevious.Y,
+						X1:    rightMousePreviousX,
+						Y1:    rightMousePreviousY,
 						X2:    t.X,
 						Y2:    t.Y,
 						Value: selected_material}
 				}
 			}
 		case *sdl.KeyboardEvent:
-			keyCode := t.Keysym.Sym
-			// fmt.Println(string(keyCode))
-			switch string(keyCode) {
+			switch string(t.Keysym.Sym) {
 			case " ":
+				// switch between MATERIAL and TEMPERATURE views
 				if t.State == sdl.PRESSED {
 					HeatMap_Event_chan <- SWITCH_VIEW
 				}
 			case "r":
+				// clear the screen
 				HeatMap_Event_chan <- Set_Rect{
 					X1:    marginW,
 					Y1:    marginN,
@@ -219,33 +249,7 @@ func main() {
 			}
 		}
 	}
-	heatMap_wg.Wait()
-}
-
-func runHeatMap(func_wg *sync.WaitGroup) {
-	defer func_wg.Done()
-	var channel_empty bool
-	var event HeatMap_Event
-
-	for program_running {
-		channel_empty = true
-		for channel_empty {
-			select {
-			case event = <-HeatMap_Event_chan:
-				event.Draw_to_Arr()
-			default:
-				channel_empty = false
-			}
-		}
-		switch program_view {
-		case TEMPERATURE_VIEW:
-			heatFlow()
-			showTemperature()
-		case MATERIAL_VIEW:
-			heatFlow()
-			showMaterial()
-		}
-	}
+	main_thread.Wait()
 }
 
 func heatFlow() {
@@ -298,17 +302,13 @@ func (view viewType) Draw_to_Arr() {
 	} else {
 		program_view = view
 	}
-	// If the view has changed, then set the texture to black
+	// since the view has changed, set the texture to black
 	bytes, _, err := tex.Lock(nil)
 	if err != nil {
 		panic(err)
 	}
-	for i := range elementArr {
-		for j := range elementArr[i] {
-			bytes[(heatMapW*i+j)*4] = 0
-			bytes[(heatMapW*i+j)*4+1] = 0
-			bytes[(heatMapW*i+j)*4+2] = 0
-		}
+	for i := 0; i < len(bytes); i++ {
+		bytes[i] = 0
 	}
 	tex.Unlock()
 	renderer.Copy(tex, nil, heatMapRectPtr)
