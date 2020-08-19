@@ -137,38 +137,6 @@ func initSDL() (err error) {
 }
 
 func main() {
-	var channel_empty bool
-	var event HeatMap_Event
-	var main_thread sync.WaitGroup
-	// Delay destruction of texture until texture not needed
-	go parseUserInput(&main_thread)
-	main_thread.Add(1)
-
-	initMaterials()
-	event = <-HeatMap_Event_chan
-
-	for program_running {
-		channel_empty = true
-		for channel_empty {
-			select {
-			case event = <-HeatMap_Event_chan:
-				event.Draw_to_Arr()
-			default:
-				channel_empty = false
-			}
-		}
-		switch program_view {
-		case TEMPERATURE_VIEW:
-			heatFlow()
-			showTemperature()
-		case MATERIAL_VIEW:
-			showMaterial()
-		}
-	}
-	main_thread.Done()
-}
-
-func parseUserInput(main_thread *sync.WaitGroup) {
 	if initSDL() != nil {
 		return
 	}
@@ -176,11 +144,15 @@ func parseUserInput(main_thread *sync.WaitGroup) {
 	defer window.Destroy()
 	defer renderer.Destroy()
 	defer tex.Destroy()
+	initMaterials()
+
+	// Prevent texture deletion while runHeatMap() is running
+	var heatMap_wg sync.WaitGroup
+	go runHeatMap(&heatMap_wg)
+	heatMap_wg.Add(1)
 
 	var leftMousePressed bool
-	var rightMousePreviousX int32
-	var rightMousePreviousY int32
-	HeatMap_Event_chan <- nil
+	var rightMousePrevious point
 
 	for program_running {
 		switch t := sdl.PollEvent().(type) {
@@ -200,12 +172,12 @@ func parseUserInput(main_thread *sync.WaitGroup) {
 				}
 			} else if t.Button == sdl.BUTTON_RIGHT {
 				if t.State == sdl.PRESSED {
-					rightMousePreviousX = t.X
-					rightMousePreviousY = t.Y
+					rightMousePrevious.X = t.X
+					rightMousePrevious.Y = t.Y
 				} else {
 					HeatMap_Event_chan <- Set_Rect{
-						X1:    rightMousePreviousX,
-						Y1:    rightMousePreviousY,
+						X1:    rightMousePrevious.X,
+						Y1:    rightMousePrevious.Y,
 						X2:    t.X,
 						Y2:    t.Y,
 						Value: selected_material}
@@ -249,7 +221,34 @@ func parseUserInput(main_thread *sync.WaitGroup) {
 			}
 		}
 	}
-	main_thread.Wait()
+	heatMap_wg.Wait()
+}
+
+func runHeatMap(func_wg *sync.WaitGroup) {
+	defer func_wg.Done()
+	var channel_empty bool
+	var event HeatMap_Event
+
+	for program_running {
+		channel_empty = true
+		for channel_empty {
+			// until the channel is empty
+			select {
+			case event = <-HeatMap_Event_chan:
+				// execute an event from the channel
+				event.Draw_to_Arr()
+			default:
+				channel_empty = false
+			}
+		}
+		switch program_view {
+		case TEMPERATURE_VIEW:
+			heatFlow()        // model heat flow
+			showTemperature() // draw temperatures to screen
+		case MATERIAL_VIEW:
+			showMaterial() // draw materials to screen
+		}
+	}
 }
 
 func heatFlow() {
