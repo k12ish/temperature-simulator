@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"github.com/veandco/go-sdl2/gfx"
 	"github.com/veandco/go-sdl2/sdl"
 	"os"
 	"sync"
@@ -11,11 +10,11 @@ import (
 const (
 	marginN = 15
 	marginE = 15
-	marginS = 40
+	marginS = 15
 	marginW = 15
 
-	heatMapW = 400
-	heatMapH = 400
+	heatMapW = 420
+	heatMapH = 360
 
 	winTitle  = "Temperature Simulator"
 	winHeight = marginN + heatMapH + marginS
@@ -41,7 +40,7 @@ type material byte
 const (
 	Aluminium material = 1 << iota
 	Glass
-	Water
+	Diamond
 	MaxMaterials
 )
 
@@ -72,17 +71,16 @@ func initMaterials() {
 	// Isobaric (volumetric) Heatcapacities
 	heatCapacity[Aluminium] = 2.422 // J / cm^3 K
 	heatCapacity[Glass] = 2.1       // J / cm^3 K
-	heatCapacity[Water] = 4.179     // J / cm^3 K
+	heatCapacity[Diamond] = 1.782	// J / cm^3 K
 
 	for i := range heatCapacity {
-		// storing calculated values reduces FLOPS
 		recip_heatCapacity[i] = 1 / heatCapacity[i]
 	}
 
 	// Thermal conductivies
 	conductivity[Aluminium] = 205.0 // W / cm K
 	conductivity[Glass] = 0.8       // W / cm K
-	conductivity[Water] = 0.6       // W / cm K
+	conductivity[Diamond] = 1000    // W / cm K
 
 	// iterate through all possible pairs of material elements
 	for i := material(1); i < MaxMaterials; i <<= 1 {
@@ -101,11 +99,7 @@ func initMaterials() {
 
 	for i := range elementArr {
 		for j := range elementArr[i] {
-			if j < int(heatMapW/2) {
-				elementArr[i][j].material = Aluminium
-			} else {
-				elementArr[i][j].material = Glass
-			}
+			elementArr[i][j].material = Glass
 		}
 	}
 }
@@ -131,8 +125,6 @@ func initSDL() (err error) {
 	renderer.SetDrawColor(0, 0, 0, 255)
 	renderer.Clear()
 	renderer.Present()
-	gfx.StringColor(renderer, marginW, marginN+heatMapH+15,
-		"Fourier's Law implementation bug", sdl.Color{0, 255, 0, 255})
 	return nil
 }
 
@@ -180,7 +172,7 @@ func main() {
 						Y1:    rightMousePrevious.Y,
 						X2:    t.X,
 						Y2:    t.Y,
-						Value: selected_material}
+						Value: nil}
 				}
 			}
 		case *sdl.KeyboardEvent:
@@ -321,7 +313,45 @@ func showTemperature() {
 	}
 	for i, sublist := range elementArr {
 		for j, value := range sublist {
-			bytes[(heatMapW*i+j)*4] = uint8(value.Temperature())
+			l := value.Temperature() + 400
+			var t, r, g, b float32
+			if (l >= 400.0) && (l < 410.0) {
+				t = (l - 400.0) / (410.0 - 400.0)
+				r = +(0.33 * t) - (0.20 * t * t)
+			} else if (l >= 410.0) && (l < 475.0) {
+				t = (l - 410.0) / (475.0 - 410.0)
+				r = 0.14 - (0.13 * t * t)
+			} else if (l >= 545.0) && (l < 595.0) {
+				t = (l - 545.0) / (595.0 - 545.0)
+				r = +(1.98 * t) - (t * t)
+			} else if (l >= 595.0) && (l < 650.0) {
+				t = (l - 595.0) / (650.0 - 595.0)
+				r = 0.98 + (0.06 * t) - (0.40 * t * t)
+			} else if (l >= 650.0) && (l < 700.0) {
+				t = (l - 650.0) / (700.0 - 650.0)
+				r = 0.65 - (0.64 * t) + (0.20 * t * t)
+			}
+			if (l >= 415.0) && (l < 475.0) {
+				t = (l - 415.0) / (475.0 - 415.0)
+				g = (0.80 * t * t)
+			} else if (l >= 475.0) && (l < 590.0) {
+				t = (l - 475.0) / (590.0 - 475.0)
+				g = 0.8 + (0.76 * t) - (0.80 * t * t)
+			} else if (l >= 585.0) && (l < 639.0) {
+				t = (l - 585.0) / (639.0 - 585.0)
+				g = 0.84 - (0.84 * t)
+			}
+			if (l >= 400.0) && (l < 475.0) {
+				t = (l - 400.0) / (475.0 - 400.0)
+				b = +(2.20 * t) - (1.50 * t * t)
+			} else if (l >= 475.0) && (l < 560.0) {
+				t = (l - 475.0) / (560.0 - 475.0)
+				b = 0.7 - (t) + (0.30 * t * t)
+			}
+
+			bytes[(heatMapW*i+j)*4] = byte(255 * r)
+			bytes[(heatMapW*i+j)*4+1] = byte(255 * g)
+			bytes[(heatMapW*i+j)*4+2] = byte(255 * b)
 		}
 	}
 	tex.Unlock()
@@ -339,25 +369,25 @@ func showMaterial() {
 		for j, value := range sublist {
 			switch value.material {
 			case material(1):
-				bytes[(heatMapW_star_i+j)*4] = uint8(140)
-				bytes[(heatMapW_star_i+j)*4+1] = uint8(138)
-				bytes[(heatMapW_star_i+j)*4+2] = uint8(232)
-			case material(2):
-				bytes[(heatMapW_star_i+j)*4] = uint8(193)
-				bytes[(heatMapW_star_i+j)*4+1] = uint8(198)
+				bytes[(heatMapW_star_i+j)*4] = uint8(226)
+				bytes[(heatMapW_star_i+j)*4+1] = uint8(124)
 				bytes[(heatMapW_star_i+j)*4+2] = uint8(75)
+			case material(2):
+				bytes[(heatMapW_star_i+j)*4] = uint8(106)
+				bytes[(heatMapW_star_i+j)*4+1] = uint8(208)
+				bytes[(heatMapW_star_i+j)*4+2] = uint8(122)
 			case material(4):
 				bytes[(heatMapW_star_i+j)*4] = uint8(227)
 				bytes[(heatMapW_star_i+j)*4+1] = uint8(103)
 				bytes[(heatMapW_star_i+j)*4+2] = uint8(189)
 			case material(8):
-				bytes[(heatMapW_star_i+j)*4] = uint8(106)
-				bytes[(heatMapW_star_i+j)*4+1] = uint8(208)
-				bytes[(heatMapW_star_i+j)*4+2] = uint8(122)
-			default:
-				bytes[(heatMapW_star_i+j)*4] = uint8(226)
-				bytes[(heatMapW_star_i+j)*4+1] = uint8(124)
+				bytes[(heatMapW_star_i+j)*4] = uint8(193)
+				bytes[(heatMapW_star_i+j)*4+1] = uint8(198)
 				bytes[(heatMapW_star_i+j)*4+2] = uint8(75)
+			default:
+				bytes[(heatMapW_star_i+j)*4] = uint8(140)
+				bytes[(heatMapW_star_i+j)*4+1] = uint8(138)
+				bytes[(heatMapW_star_i+j)*4+2] = uint8(232)
 			}
 		}
 	}
@@ -438,6 +468,8 @@ type HeatMap_Event interface {
 	Draw_to_Arr()
 }
 
+
+
 type point struct {
 	X int32
 	Y int32
@@ -455,7 +487,7 @@ func (p point) Draw_to_Arr() {
 		switch program_view {
 		case TEMPERATURE_VIEW:
 			for _, l := range standardBrush.Points {
-				elementArr[y+l[1]][x+l[0]].energy += heatCapacity[Water] * 5
+				elementArr[y+l[1]][x+l[0]].energy += 20
 			}
 		case MATERIAL_VIEW:
 			for _, l := range standardBrush.Points {
@@ -499,6 +531,19 @@ func (r Set_Rect) Draw_to_Arr() {
 			}
 		}
 	default:
-		panic("Set_Rect recieved unsupported type")
+		switch program_view{
+		case TEMPERATURE_VIEW:
+			for y := y1; y <= y2; y++ {
+				for x := x1; x <= x2; x++ {
+					elementArr[y][x].energy = 250
+				}
+			}
+		case MATERIAL_VIEW:
+			for y := y1; y <= y2; y++ {
+				for x := x1; x <= x2; x++ {
+					elementArr[y][x].material = selected_material
+				}
+			}
+		}
 	}
 }
