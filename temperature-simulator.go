@@ -8,13 +8,13 @@ import (
 )
 
 const (
-	marginN = 15
-	marginE = 15
-	marginS = 15
-	marginW = 15
+	marginN = 2
+	marginE = 2
+	marginS = 2
+	marginW = 2
 
-	heatMapW = 420
-	heatMapH = 360
+	heatMapW = 854
+	heatMapH = 480
 
 	winTitle  = "Temperature Simulator"
 	winHeight = marginN + heatMapH + marginS
@@ -95,6 +95,8 @@ func initMaterials() {
 	for i := range conductivity {
 		// premultiply by sidelength of cubic element
 		conductivity[i] *= 0.01
+		// premultiply by time interval 
+		conductivity[i] *= 0.05
 	}
 
 	for i := range elementArr {
@@ -145,6 +147,7 @@ func main() {
 
 	var leftMousePressed bool
 	var rightMousePrevious point
+	var middleMousePrevious point
 
 	for program_running {
 		switch t := sdl.PollEvent().(type) {
@@ -174,6 +177,18 @@ func main() {
 						Y2:    t.Y,
 						Value: nil}
 				}
+			} else if t.Button == sdl.BUTTON_MIDDLE {
+				if t.State == sdl.PRESSED {
+					middleMousePrevious.X = t.X
+					middleMousePrevious.Y = t.Y
+				} else {
+					HeatMap_Event_chan <- Set_Rect{
+						X1:    middleMousePrevious.X,
+						Y1:    middleMousePrevious.Y,
+						X2:    t.X,
+						Y2:    t.Y,
+						Value: float32(0)}
+				}
 			}
 		case *sdl.KeyboardEvent:
 			switch string(t.Keysym.Sym) {
@@ -182,14 +197,22 @@ func main() {
 				if t.State == sdl.PRESSED {
 					HeatMap_Event_chan <- SWITCH_VIEW
 				}
-			case "r":
-				// clear the screen
+			case "e":
+				// reset the energies
 				HeatMap_Event_chan <- Set_Rect{
 					X1:    marginW,
 					Y1:    marginN,
 					X2:    marginW + heatMapW - 1,
 					Y2:    marginN + heatMapH - 1,
 					Value: float32(0)}
+			case "m":
+				// reset the materials
+				HeatMap_Event_chan <- Set_Rect{
+					X1:    marginW,
+					Y1:    marginN,
+					X2:    marginW + heatMapW - 1,
+					Y2:    marginN + heatMapH - 1,
+					Value: selected_material}
 			case "1":
 				if material(1) < MaxMaterials {
 					HeatMap_Event_chan <- material(1)
@@ -222,6 +245,7 @@ func runHeatMap(func_wg *sync.WaitGroup) {
 	var event HeatMap_Event
 
 	for program_running {
+		// start := time.Now()
 		channel_empty = true
 		for channel_empty {
 			// until the channel is empty
@@ -235,35 +259,35 @@ func runHeatMap(func_wg *sync.WaitGroup) {
 		}
 		switch program_view {
 		case TEMPERATURE_VIEW:
-			heatFlow()        // model heat flow
+			heatFlow() // model heat flow
 			showTemperature() // draw temperatures to screen
 		case MATERIAL_VIEW:
 			showMaterial() // draw materials to screen
 		}
+		// elapsed := time.Now().Sub(start)
+		// fmt.Println(elapsed)
 	}
 }
 
 func heatFlow() {
+	// simulate heat flow horizontally
 	for i := 0; i < heatMapH; i++ {
 		for j := 1; j < heatMapW; j++ {
 			a, b := elementArr[i][j], elementArr[i][j-1]
-			q := (a.Temperature() - b.Temperature()) *
-				conductivity[a.material|b.material] *
-				0.05
-
-			elementArr[i][j].energy -= q
-			elementArr[i][j-1].energy += q
+			q := conductivity[a.material|b.material] *
+				(a.Temperature() - b.Temperature())
+			elementArr[i][j].energy = a.energy - q
+			elementArr[i][j-1].energy = b.energy + q
 		}
 	}
+	// simulate heat flow vertically
 	for i := 1; i < heatMapH; i++ {
 		for j := 0; j < heatMapW; j++ {
 			a, b := elementArr[i][j], elementArr[i-1][j]
-			q := (a.Temperature() - b.Temperature()) *
-				conductivity[a.material|b.material] *
-				0.05
-
-			elementArr[i][j].energy -= q
-			elementArr[i-1][j].energy += q
+			q := conductivity[a.material|b.material] *
+				(a.Temperature() - b.Temperature())
+			elementArr[i][j].energy = a.energy - q
+			elementArr[i-1][j].energy = b.energy + q
 		}
 	}
 }
@@ -517,6 +541,14 @@ func (r Set_Rect) Draw_to_Arr() {
 	if y1 > y2 {
 		y1, y2 = y2, y1
 	}
+	
+	// if program_view == MATERIAL_VIEW {
+	// 	x1 -= x1 % 12
+	// 	x2 -= x2 % 12
+	// 	y1 -= y1 % 12
+	// 	y2 -= y2 % 12
+	// }
+
 	switch r.Value.(type) {
 	case material:
 		for y := y1; y <= y2; y++ {
@@ -535,7 +567,7 @@ func (r Set_Rect) Draw_to_Arr() {
 		case TEMPERATURE_VIEW:
 			for y := y1; y <= y2; y++ {
 				for x := x1; x <= x2; x++ {
-					elementArr[y][x].energy = 250
+					elementArr[y][x].energy = 400
 				}
 			}
 		case MATERIAL_VIEW:
